@@ -1,4 +1,4 @@
-package com.example.ai2.common;
+package com.example.aicode.common;
 
 import lombok.Getter;
 
@@ -15,6 +15,9 @@ import lombok.Getter;
  * <pre>{@code
  * throw new BusinessException(ErrorCode.PARAMS_ERROR);
  * }</pre>
+ *
+ * @author AI Code
+ * @see BusinessException
  */
 @Getter
 public enum ErrorCode {
@@ -43,14 +46,24 @@ public enum ErrorCode {
     /** 操作失败 */
     OPERATION_ERROR(50001, "操作失败");
 
-    /** 错误码 */
+    /**
+     * 错误码，遵循「模块前缀 + 错误类型 + 序号」的编码规则，用于标识具体错误类型。
+     */
     private final int code;
 
-    /** 错误信息 */
+    /**
+     * 错误信息，描述错误的具体内容，用于前端展示与日志记录。
+     */
     private final String message;
 
+    /**
+     * 枚举构造方法，初始化错误码与错误信息。
+     *
+     * @param code    错误码
+     * @param message 错误信息描述
+     */
     ErrorCode(int code, String message) {
-        this.code = code;
-        this.message = message;
+        this.code = code;       // 初始化错误码
+        this.message = message; // 初始化错误信息
     }
 }
