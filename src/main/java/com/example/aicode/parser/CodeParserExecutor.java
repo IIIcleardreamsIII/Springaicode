@@ -25,6 +25,9 @@ public class CodeParserExecutor {
     /** 多文件解析器单例（类加载时初始化一次） */
     private static final MultiFileCodeParser multiFileCodeParser = new MultiFileCodeParser();
 
+    /** 前端工程化项目解析器单例（类加载时初始化一次） */
+    private static final ProjectCodeParser projectCodeParser = new ProjectCodeParser();
+
     /**
      * 根据代码生成类型，分派到对应的解析器执行解析。
      * <p>
@@ -42,6 +45,7 @@ public class CodeParserExecutor {
         return switch (codeGenType) {
             case HTML -> htmlCodeParser.parseCode(codeContent);
             case MULTI_FILE -> multiFileCodeParser.parseCode(codeContent);
+            case PROJECT -> projectCodeParser.parseCode(codeContent);
             default -> throw new BusinessException(ErrorCode.SYSTEM_ERROR, "不支持的代码生成类型: " + codeGenType);
         };
     }

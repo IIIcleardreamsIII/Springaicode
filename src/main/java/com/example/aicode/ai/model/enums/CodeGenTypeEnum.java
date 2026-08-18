@@ -27,7 +27,10 @@ public enum CodeGenTypeEnum {
     HTML("原生 HTML 模式", "html"),
 
     /** 原生多文件模式：AI 分别生成 HTML、CSS、JS 三个文件 */
-    MULTI_FILE("原生多文件模式", "multi_file");
+    MULTI_FILE("原生多文件模式", "multi_file"),
+
+    /** 前端工程化项目模式：AI 生成 Vue3 + Vite + TypeScript 完整工程（多文件 + 工程化配置） */
+    PROJECT("前端工程化项目模式", "project");
 
     /** text：给人类看的展示文本（例如页面下拉框显示用） */
     private final String text;

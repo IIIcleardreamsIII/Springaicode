@@ -1,10 +1,14 @@
 package com.example.aicode.core;
 
+import cn.hutool.core.io.FileUtil;
+import cn.hutool.core.util.StrUtil;
 import com.example.aicode.ai.model.HtmlCodeResult;
 import com.example.aicode.ai.model.MultiFileCodeResult;
+import com.example.aicode.ai.model.ProjectCodeResult;
 import com.example.aicode.ai.model.enums.CodeGenTypeEnum;
 import com.example.aicode.common.BusinessException;
 import com.example.aicode.common.ErrorCode;
+import com.example.aicode.constant.AppConstant;
 import com.example.aicode.parser.CodeParserExecutor;
 import com.example.aicode.saver.CodeFileSaverExecutor;
 import com.example.aicode.service.AiCodeGeneratorService;
@@ -55,7 +59,7 @@ public class AiCodeGeneratorFacade {
      * @return 保存目录
      */
     private File generateAndSaveHtmlCode(String userMessage) {
-        HtmlCodeResult result = aiCodeGeneratorService.generateHtmlCode(userMessage);
+        HtmlCodeResult result = aiCodeGeneratorService.generateHtmlCode(AiCodeGeneratorService.DEFAULT_MEMORY_ID, userMessage);
         return CodeFileSaver.saveHtmlCodeResult(result);
     }
 
@@ -66,7 +70,7 @@ public class AiCodeGeneratorFacade {
      * @return 保存目录
      */
     private File generateAndSaveMultiFileCode(String userMessage) {
-        MultiFileCodeResult result = aiCodeGeneratorService.generateMultiFileCode(userMessage);
+        MultiFileCodeResult result = aiCodeGeneratorService.generateMultiFileCode(AiCodeGeneratorService.DEFAULT_MEMORY_ID, userMessage);
         return CodeFileSaver.saveMultiFileCodeResult(result);
     }
 
@@ -83,7 +87,7 @@ public class AiCodeGeneratorFacade {
      */
     private Flux<String> generateAndSaveHtmlCodeStream(String userMessage) {
         // 调用 AI 流式接口，返回逐段文本流
-        Flux<String> result = aiCodeGeneratorService.generateHtmlCodeStream(userMessage);
+        Flux<String> result = aiCodeGeneratorService.generateHtmlCodeStream(AiCodeGeneratorService.DEFAULT_MEMORY_ID, userMessage);
         StringBuilder codeBuilder = new StringBuilder();
         return result
                 .doOnNext(chunk -> {
@@ -111,7 +115,7 @@ public class AiCodeGeneratorFacade {
      * @return 透传的流
      */
     private Flux<String> generateAndSaveMultiFileCodeStream(String userMessage) {
-        Flux<String> result = aiCodeGeneratorService.generateMultiFileCodeStream(userMessage);
+        Flux<String> result = aiCodeGeneratorService.generateMultiFileCodeStream(AiCodeGeneratorService.DEFAULT_MEMORY_ID, userMessage);
         StringBuilder codeBuilder = new StringBuilder();
         return result
                 .doOnNext(chunk -> codeBuilder.append(chunk))
@@ -187,10 +191,33 @@ public class AiCodeGeneratorFacade {
                 // 用保存执行器按类型落盘，目录名关联 appId
                 File savedDir = CodeFileSaverExecutor.executeSaver(parsedResult, codeGenType, appId);
                 log.info("保存成功，路径为：" + savedDir.getAbsolutePath());
+                // 工程化项目类型：生成完成后立即构建出 dist，供预览通道访问。
+                // 构建失败仅记录日志，不阻断流式返回（前端会展示"构建失败"提示）。
+                if (codeGenType == CodeGenTypeEnum.PROJECT) {
+                    buildProjectForPreview(savedDir);
+                }
             } catch (Exception e) {
                 log.error("保存失败: {}", e.getMessage());
             }
         });
+    }
+
+    /**
+     * 构建工程化项目用于预览（在生成落盘后调用）。
+     * <p>
+     * 构建产物写入 {@code {projectDir}/dist}，预览通道会读取该 dist 目录。
+     * 构建是耗时操作（首次 npm install 可能几十秒），此处异步执行避免阻塞
+     * SSE 流式响应；构建结果由前端轮询 dist/index.html 是否存在来判断。
+     *
+     * @param projectDir 工程项目根目录（已落盘源码）
+     */
+    private void buildProjectForPreview(File projectDir) {
+        try {
+            ProjectBuilder.build(projectDir);
+            log.info("工程化项目构建完成，预览产物已生成：{}", projectDir.getAbsolutePath());
+        } catch (Exception e) {
+            log.error("工程化项目构建失败（预览不可用，但不影响部署）：{}", e.getMessage());
+        }
     }
 
     /**
@@ -209,12 +236,16 @@ public class AiCodeGeneratorFacade {
         }
         return switch (codeGenTypeEnum) {
             case HTML -> {
-                HtmlCodeResult result = aiCodeGeneratorService.generateHtmlCode(userMessage);
+                HtmlCodeResult result = aiCodeGeneratorService.generateHtmlCode(AiCodeGeneratorService.DEFAULT_MEMORY_ID, userMessage);
                 yield CodeFileSaverExecutor.executeSaver(result, CodeGenTypeEnum.HTML);
             }
             case MULTI_FILE -> {
-                MultiFileCodeResult result = aiCodeGeneratorService.generateMultiFileCode(userMessage);
+                MultiFileCodeResult result = aiCodeGeneratorService.generateMultiFileCode(AiCodeGeneratorService.DEFAULT_MEMORY_ID, userMessage);
                 yield CodeFileSaverExecutor.executeSaver(result, CodeGenTypeEnum.MULTI_FILE);
+            }
+            case PROJECT -> {
+                ProjectCodeResult result = aiCodeGeneratorService.generateProjectCode(AiCodeGeneratorService.DEFAULT_MEMORY_ID, userMessage);
+                yield CodeFileSaverExecutor.executeSaver(result, CodeGenTypeEnum.PROJECT);
             }
             default -> {
                 String errorMessage = "不支持的生成类型：" + codeGenTypeEnum.getValue();
@@ -240,12 +271,16 @@ public class AiCodeGeneratorFacade {
         }
         return switch (codeGenTypeEnum) {
             case HTML -> {
-                Flux<String> codeStream = aiCodeGeneratorService.generateHtmlCodeStream(userMessage);
+                Flux<String> codeStream = aiCodeGeneratorService.generateHtmlCodeStream(AiCodeGeneratorService.DEFAULT_MEMORY_ID, userMessage);
                 yield processCodeStream(codeStream, CodeGenTypeEnum.HTML, userMessage);
             }
             case MULTI_FILE -> {
-                Flux<String> codeStream = aiCodeGeneratorService.generateMultiFileCodeStream(userMessage);
+                Flux<String> codeStream = aiCodeGeneratorService.generateMultiFileCodeStream(AiCodeGeneratorService.DEFAULT_MEMORY_ID, userMessage);
                 yield processCodeStream(codeStream, CodeGenTypeEnum.MULTI_FILE, userMessage);
+            }
+            case PROJECT -> {
+                Flux<String> codeStream = aiCodeGeneratorService.generateProjectCodeStream(AiCodeGeneratorService.DEFAULT_MEMORY_ID, userMessage);
+                yield processCodeStream(codeStream, CodeGenTypeEnum.PROJECT, userMessage);
             }
             default -> {
                 String errorMessage = "不支持的生成类型：" + codeGenTypeEnum.getValue();
@@ -271,20 +306,154 @@ public class AiCodeGeneratorFacade {
         if (codeGenTypeEnum == null) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "生成类型为空");
         }
+        // 后续对话修改：若应用已存在生成的代码，则把现有代码文件内容作为上下文拼进提示词，
+        // 让 AI 在原有代码基础上做最小化修改，而不是推倒重来、重新生成一套全新代码。
+        String effectivePrompt = buildModifyPrompt(userMessage, codeGenTypeEnum, appId);
         return switch (codeGenTypeEnum) {
             case HTML -> {
-                Flux<String> codeStream = aiCodeGeneratorService.generateHtmlCodeStream(userMessage);
+                Flux<String> codeStream = aiCodeGeneratorService.generateHtmlCodeStream(appId, effectivePrompt);
                 yield processCodeStream(codeStream, CodeGenTypeEnum.HTML, appId);
             }
             case MULTI_FILE -> {
-                Flux<String> codeStream = aiCodeGeneratorService.generateMultiFileCodeStream(userMessage);
+                Flux<String> codeStream = aiCodeGeneratorService.generateMultiFileCodeStream(appId, effectivePrompt);
                 yield processCodeStream(codeStream, CodeGenTypeEnum.MULTI_FILE, appId);
+            }
+            case PROJECT -> {
+                Flux<String> codeStream = aiCodeGeneratorService.generateProjectCodeStream(appId, effectivePrompt);
+                yield processCodeStream(codeStream, CodeGenTypeEnum.PROJECT, appId);
             }
             default -> {
                 String errorMessage = "不支持的生成类型：" + codeGenTypeEnum.getValue();
                 throw new BusinessException(ErrorCode.SYSTEM_ERROR, errorMessage);
             }
         };
+    }
+
+    /**
+     * 构建本轮实际使用的提示词（支持"基于原代码修改"）。
+     * <p>
+     * 若该应用已生成过代码（对应输出目录存在），则读取现有代码文件，
+     * 拼装成"现有代码 + 用户新需求"的修改指令，让 AI 基于原代码修改；
+     * 首次生成（目录不存在或没读到有效代码）时原样返回 userMessage。
+     *
+     * @param userMessage     本轮用户消息
+     * @param codeGenTypeEnum 代码生成类型
+     * @param appId           应用 id
+     * @return 实际发送给 AI 的提示词
+     */
+    private String buildModifyPrompt(String userMessage, CodeGenTypeEnum codeGenTypeEnum, Long appId) {
+        // 应用专属输出目录：{CODE_OUTPUT_ROOT_DIR}/{type}_{appId}
+        String dirPath = AppConstant.CODE_OUTPUT_ROOT_DIR + File.separator
+                + StrUtil.format("{}_{}", codeGenTypeEnum.getValue(), appId);
+        File codeDir = new File(dirPath);
+        // 首次生成：目录不存在，直接用原提示词
+        if (!codeDir.exists() || !codeDir.isDirectory()) {
+            return userMessage;
+        }
+        // 读取已有代码文件内容（HTML 模式仅 index.html；多文件模式额外读取 css/js；
+        // 工程化项目模式递归读取整个工程目录下的所有文件）
+        StringBuilder context = new StringBuilder();
+        appendFileContent(context, codeDir, "index.html");
+        if (codeGenTypeEnum == CodeGenTypeEnum.MULTI_FILE) {
+            appendFileContent(context, codeDir, "style.css");
+            appendFileContent(context, codeDir, "script.js");
+        } else if (codeGenTypeEnum == CodeGenTypeEnum.PROJECT) {
+            appendProjectFiles(context, codeDir);
+        }
+        // 目录存在但没读到有效代码，退化为全新生成
+        if (context.length() == 0) {
+            return userMessage;
+        }
+        // 拼装"基于原代码修改"的提示词
+        return StrUtil.format(
+                "以下是该应用当前已生成的完整代码，请严格基于这些原代码进行修改，不要重新生成一套全新的代码：\n\n" +
+                        "{}\n" +
+                        "用户的新需求：{}\n\n" +
+                        "请只针对上述需求对现有代码做最小化修改，保持其余功能、结构与样式不变，并按系统要求输出修改后的完整代码。",
+                context, userMessage);
+    }
+
+    /**
+     * 读取目录下指定文件内容并追加到上下文（带代码块标记，便于 AI 识别语言）。
+     *
+     * @param context  上下文字符串构建器
+     * @param codeDir  代码目录
+     * @param filename 文件名（如 index.html）
+     */
+    private void appendFileContent(StringBuilder context, File codeDir, String filename) {
+        File file = new File(codeDir, filename);
+        if (!file.exists() || !file.isFile()) {
+            return;
+        }
+        try {
+            String content = FileUtil.readUtf8String(file);
+            if (StrUtil.isNotBlank(content)) {
+                context.append("【文件：").append(filename).append("】\n")
+                        .append("```").append(languageOf(filename)).append('\n')
+                        .append(content).append('\n')
+                        .append("```\n\n");
+            }
+        } catch (Exception e) {
+            log.warn("读取已有代码文件失败：{}", file.getAbsolutePath(), e);
+        }
+    }
+
+    /**
+     * 根据文件名返回代码块语言标识。
+     *
+     * @param filename 文件名
+     * @return 语言标识（html/css/js/ts/vue/json 等）
+     */
+    private String languageOf(String filename) {
+        if (filename.endsWith(".html")) {
+            return "html";
+        }
+        if (filename.endsWith(".css")) {
+            return "css";
+        }
+        if (filename.endsWith(".js")) {
+            return "js";
+        }
+        if (filename.endsWith(".ts")) {
+            return "ts";
+        }
+        if (filename.endsWith(".vue")) {
+            return "vue";
+        }
+        if (filename.endsWith(".json")) {
+            return "json";
+        }
+        return "";
+    }
+
+    /**
+     * 递归读取工程化项目目录下的所有文件，按相对路径拼入上下文。
+     * <p>
+     * 跳过 node_modules、dist、.git 等无需参与修改的目录，避免上下文过长。
+     *
+     * @param context 上下文字符串构建器
+     * @param codeDir 工程项目根目录
+     */
+    private void appendProjectFiles(StringBuilder context, File codeDir) {
+        File[] files = codeDir.listFiles();
+        if (files == null) {
+            return;
+        }
+        for (File file : files) {
+            String name = file.getName();
+            // 跳过常见的大型/生成目录
+            if (file.isDirectory()) {
+                if ("node_modules".equals(name) || "dist".equals(name) || ".git".equals(name) || "target".equals(name)) {
+                    continue;
+                }
+                appendProjectFiles(context, file);
+            } else if (file.isFile()) {
+                // 用相对工程根目录的路径作为文件名标识
+                String relative = codeDir.toPath().relativize(file.toPath()).toString()
+                        .replace('\\', '/');
+                appendFileContent(context, codeDir, relative);
+            }
+        }
     }
 
 }

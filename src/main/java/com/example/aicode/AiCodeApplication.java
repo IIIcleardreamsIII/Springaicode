@@ -1,5 +1,6 @@
 package com.example.aicode;
 
+import dev.langchain4j.community.store.embedding.redis.spring.RedisEmbeddingStoreAutoConfiguration;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -20,7 +21,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * @author AI Code
  * @version 1.0
  */
-@SpringBootApplication // 启动类核心注解（含配置/自动装配/组件扫描三合一）
+@SpringBootApplication(exclude = {RedisEmbeddingStoreAutoConfiguration.class})
 @MapperScan("com.example.aicode.mapper") // 指定 Mapper 接口包，MyBatis 为其生成实现并注册
 public class AiCodeApplication {
 

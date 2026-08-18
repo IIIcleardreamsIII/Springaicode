@@ -2,6 +2,7 @@ package com.example.aicode.saver;
 
 import com.example.aicode.ai.model.HtmlCodeResult;
 import com.example.aicode.ai.model.MultiFileCodeResult;
+import com.example.aicode.ai.model.ProjectCodeResult;
 import com.example.aicode.ai.model.enums.CodeGenTypeEnum;
 import com.example.aicode.common.BusinessException;
 import com.example.aicode.common.ErrorCode;
@@ -28,6 +29,9 @@ public class CodeFileSaverExecutor {
     /** 多文件保存器单例 */
     private static final MultiFileCodeFileSaverTemplate multiFileCodeFileSaver = new MultiFileCodeFileSaverTemplate();
 
+    /** 前端工程化项目保存器单例 */
+    private static final ProjectCodeFileSaverTemplate projectCodeFileSaver = new ProjectCodeFileSaverTemplate();
+
     /**
      * 执行代码保存。
      *
@@ -45,6 +49,8 @@ public class CodeFileSaverExecutor {
             case HTML -> htmlCodeFileSaver.saveCode((HtmlCodeResult) codeResult);
             // 向下转型为 MultiFileCodeResult 后调用
             case MULTI_FILE -> multiFileCodeFileSaver.saveCode((MultiFileCodeResult) codeResult);
+            // 向下转型为 ProjectCodeResult 后调用
+            case PROJECT -> projectCodeFileSaver.saveCode((ProjectCodeResult) codeResult);
             default -> throw new BusinessException(ErrorCode.SYSTEM_ERROR, "不支持的代码生成类型: " + codeGenType);
         };
     }
@@ -69,6 +75,7 @@ public class CodeFileSaverExecutor {
         return switch (codeGenType) {
             case HTML -> htmlCodeFileSaver.saveCode((HtmlCodeResult) codeResult, appId);
             case MULTI_FILE -> multiFileCodeFileSaver.saveCode((MultiFileCodeResult) codeResult, appId);
+            case PROJECT -> projectCodeFileSaver.saveCode((ProjectCodeResult) codeResult, appId);
             default -> throw new BusinessException(ErrorCode.SYSTEM_ERROR, "不支持的代码生成类型: " + codeGenType);
         };
     }
