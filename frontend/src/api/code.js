@@ -26,8 +26,11 @@ export function generateCode(data) {
  * @param {function} onError 错误回调
  * @returns {EventSource} EventSource 实例（可用于手动关闭）
  */
-export function generateCodeStream({ userMessage, codeGenType, onMessage, onComplete, onError }) {
+export function generateCodeStream({ userMessage, codeGenType, appName, onMessage, onComplete, onError }) {
   const params = new URLSearchParams({ userMessage, codeGenType })
+  if (appName) {
+    params.set('appName', appName)
+  }
   const url = `/api/code/generate/stream?${params.toString()}`
 
   const eventSource = new EventSource(url)
@@ -52,9 +55,15 @@ export function generateCodeStream({ userMessage, codeGenType, onMessage, onComp
     }
   }
 
-  // 完成通知：后端主动推送的 done 命名事件
-  eventSource.addEventListener('done', () => {
-    finish(onComplete)
+  // 完成通知：后端主动推送的 done 命名事件，data 为 JSON {"appId": 新应用id}
+  eventSource.addEventListener('done', (event) => {
+    let payload
+    try {
+      payload = event.data ? JSON.parse(event.data) : undefined
+    } catch {
+      payload = undefined
+    }
+    finish(onComplete, payload)
   })
 
   // 错误处理：onerror 对"命名 error 事件"和"连接层异常"都会触发，

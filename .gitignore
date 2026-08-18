@@ -32,4 +32,5 @@ build/
 ### VS Code ###
 .vscode/
 ### CUSTOM ###
-application.yml
+# 已提交的 application.yml 只保留占位符；真实密钥放本地 application-local.yml，不进版本库
+application-local.yml

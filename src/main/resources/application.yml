@@ -1,6 +1,6 @@
 spring:
   application:
-    name: yu-ai-code-mother-backend
+    name: ai-code
   # session 配置
   session:
     store-type: redis
@@ -9,15 +9,15 @@ spring:
   # mysql
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/yu_ai_code_mother
+    url: jdbc:mysql://localhost:3306/aicode   # TODO: 确认你的数据库名
     username: root
-    password: 123456
+    password: ${DB_PASSWORD:}
   # redis
   data:
     redis:
       host: localhost
       port: 6379
-      database: 0
+      database: ${REDIS_DB:0}
       password:
       ttl: 3600 # 缓存过期时间（秒）
   profiles:
@@ -35,7 +35,7 @@ springdoc:
   group-configs:
     - group: 'default'
       paths-to-match: '/**'
-      packages-to-scan: com.yupi.yuaicodemother.controller
+      packages-to-scan: com.example.aicode.controller
 # knife4j
 knife4j:
   enable: true
@@ -46,53 +46,19 @@ langchain4j:
   open-ai:
     chat-model:
       base-url: https://api.deepseek.com
-      api-key: <Your API Key>
+      api-key: ${DEEPSEEK_API_KEY:}
       model-name: deepseek-chat
-#      strict-json-schema: true
-#      response-format: json_object
       max-tokens: 8192
       log-requests: true
       log-responses: true
       max-retries: 3
     streaming-chat-model:
       base-url: https://api.deepseek.com
-      api-key: <Your API Key>
+      api-key: ${DEEPSEEK_API_KEY:}
       model-name: deepseek-chat
       max-tokens: 8192
       log-requests: true
       log-responses: true
-    # 推理 AI 模型配置（用于复杂的推理任务）
-    reasoning-streaming-chat-model:
-      base-url: https://api.deepseek.com
-      api-key: <Your API Key>
-      model-name: deepseek-reasoner
-      max-tokens: 32768
-      temperature: 0.1
-      log-requests: true
-      log-responses: true
-    # 智能路由 AI 模型配置（用于简单的分类任务）
-    routing-chat-model:
-      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      api-key: <Your API Key>
-      model-name: qwen-turbo
-      max-tokens: 100
-      log-requests: true
-      log-responses: true
-# 添加 COS 对象存储配置（需要从腾讯云获取）
-cos:
-  client:
-    host: your-custom-domain.com
-    secretId: your-secret-id
-    secretKey: your-secret-key
-    region: ap-shanghai
-    bucket: your-bucket-name
-# Pexels 图片搜索配置
-pexels:
-  api-key: <Your API Key>
-# 阿里云 DashScope 配置
-dashscope:
-  api-key: <Your API Key>
-  image-model: wan2.2-t2i-flash
 # 监控
 management:
   endpoints:

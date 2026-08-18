@@ -42,6 +42,23 @@ public class CodeFileSaver {
     }
 
     /**
+     * 保存 HTML 单文件代码结果（应用关联版）。
+     * <p>
+     * 与 {@link #saveHtmlCodeResult(HtmlCodeResult)} 的区别：目录名使用
+     * {@code {codeGenType}_{appId}}，使产物与"我的应用"记录关联（复用预览/部署链路）。
+     *
+     * @param result          HTML 代码结果对象
+     * @param codeGenTypeEnum 生成类型
+     * @param appId           应用 id
+     * @return 保存的目标目录 {@link File}
+     */
+    public static File saveHtmlCodeResult(HtmlCodeResult result, CodeGenTypeEnum codeGenTypeEnum, long appId) {
+        String baseDirPath = buildAppDir(codeGenTypeEnum.getValue(), appId);
+        writeToFile(baseDirPath, "index.html", result.getHtmlCode());
+        return new File(baseDirPath);
+    }
+
+    /**
      * 保存多文件代码结果：建目录 → 写 index.html/style.css/script.js → 返回目录。
      *
      * @param result 多文件代码结果对象
@@ -49,6 +66,25 @@ public class CodeFileSaver {
      */
     public static File saveMultiFileCodeResult(MultiFileCodeResult result) {
         String baseDirPath = buildUniqueDir(CodeGenTypeEnum.MULTI_FILE.getValue());
+        writeToFile(baseDirPath, "index.html", result.getHtmlCode());
+        writeToFile(baseDirPath, "style.css", result.getCssCode());
+        writeToFile(baseDirPath, "script.js", result.getJsCode());
+        return new File(baseDirPath);
+    }
+
+    /**
+     * 保存多文件代码结果（应用关联版）。
+     * <p>
+     * 与 {@link #saveMultiFileCodeResult(MultiFileCodeResult)} 的区别：目录名使用
+     * {@code {codeGenType}_{appId}}，使产物与"我的应用"记录关联（复用预览/部署链路）。
+     *
+     * @param result          HTML 代码结果对象
+     * @param codeGenTypeEnum 生成类型
+     * @param appId           应用 id
+     * @return 保存的目标目录 {@link File}
+     */
+    public static File saveMultiFileCodeResult(MultiFileCodeResult result, CodeGenTypeEnum codeGenTypeEnum, long appId) {
+        String baseDirPath = buildAppDir(codeGenTypeEnum.getValue(), appId);
         writeToFile(baseDirPath, "index.html", result.getHtmlCode());
         writeToFile(baseDirPath, "style.css", result.getCssCode());
         writeToFile(baseDirPath, "script.js", result.getJsCode());
@@ -68,6 +104,23 @@ public class CodeFileSaver {
         // StrUtil.format：Hutool 的占位符格式化，{0}、{1}……或 {} 顺序填充
         String uniqueDirName = StrUtil.format("{}_{}", bizType, IdUtil.getSnowflakeNextIdStr());
         String dirPath = FILE_SAVE_ROOT_DIR + File.separator + uniqueDirName;
+        FileUtil.mkdir(dirPath); // 递归创建目录
+        return dirPath;
+    }
+
+    /**
+     * 构建应用关联目录路径。
+     * <p>
+     * 命名规则：{根目录}/{类型}_{appId}，例如 tmp/code_output/project_447282975918968832。
+     * 与应用记录一一对应，使"我的应用"列表、预览、部署链路能直接定位到生成的代码。
+     *
+     * @param bizType 业务类型标识（来自枚举的 value）
+     * @param appId   应用 id
+     * @return 创建的目录绝对路径
+     */
+    private static String buildAppDir(String bizType, long appId) {
+        String dirName = StrUtil.format("{}_{}", bizType, appId);
+        String dirPath = FILE_SAVE_ROOT_DIR + File.separator + dirName;
         FileUtil.mkdir(dirPath); // 递归创建目录
         return dirPath;
     }

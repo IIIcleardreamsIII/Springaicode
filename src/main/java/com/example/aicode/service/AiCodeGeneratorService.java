@@ -139,4 +139,25 @@ public interface AiCodeGeneratorService {
     @UserMessage("{{userMessage}}")
     Flux<String> generateProjectCodeStream(@MemoryId Object memoryId, @V("userMessage") String userMessage);
 
+    /**
+     * 修复工程化项目（流式输出）。
+     * <p>
+     * 用于"构建失败自愈"：把编译错误与当前源码拼进 userMessage，要求 AI 修复出错文件后
+     * 流式返回 Markdown 文本（保持「// 文件：相对路径」+ 代码块格式），
+     * 后端用 {@code ProjectCodeParser} 解析后重新落盘并重新构建。
+     * <p>
+     * <b>为何返回 Flux&lt;String&gt; 而非 ProjectCodeResult：</b>
+     * cccc.txt 规定 AI 输出「// 文件：路径 + 代码块」的 Markdown 格式，而非 JSON。
+     * 若声明返回 POJO，LangChain4j 会强制 AI 输出 JSON，与 cccc.txt 冲突，
+     * 导致修复结果反序列化失败或为空。故这里与 generateProjectCodeStream 保持一致，
+     * 返回流式文本，由解析器统一解析。
+     *
+     * @param memoryId    记忆隔离 id
+     * @param userMessage 包含编译错误与当前源码的修复提示词
+     * @return 流式返回的修复后代码文本
+     */
+    @SystemMessage(fromResource = "prompt/cccc.txt")
+    @UserMessage("{{userMessage}}")
+    Flux<String> fixProjectCode(@MemoryId Object memoryId, @V("userMessage") String userMessage);
+
 }

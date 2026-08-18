@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
 import java.io.File;
+import java.util.concurrent.CompletableFuture;
 
 // ============================================================
 // 外观模式（Facade）+ 响应式编程（Reactor Flux）科普（请先读这里）
@@ -192,12 +193,19 @@ public class AiCodeGeneratorFacade {
                 File savedDir = CodeFileSaverExecutor.executeSaver(parsedResult, codeGenType, appId);
                 log.info("保存成功，路径为：" + savedDir.getAbsolutePath());
                 // 工程化项目类型：生成完成后立即构建出 dist，供预览通道访问。
-                // 构建失败仅记录日志，不阻断流式返回（前端会展示"构建失败"提示）。
+                // 关键：构建（含 npm install / npm run build / 自愈重试）是耗时操作，
+                // 若在 doOnComplete 里同步执行，会阻塞 Reactor 流的完成信号，导致前端
+                // 迟迟收不到 done 事件、界面一直停留在"生成中"。这里放到独立线程异步构建，
+                // 让 done 事件立即发出；前端收到 done 后自行轮询 dist/index.html 是否就绪。
                 if (codeGenType == CodeGenTypeEnum.PROJECT) {
-                    buildProjectForPreview(savedDir);
+                    CompletableFuture.runAsync(() -> buildProjectForPreview(savedDir, appId));
                 }
             } catch (Exception e) {
+                // 解析/落盘失败：把异常重新抛出，让 Reactor 触发订阅者的 onError，
+                // 从而通过 SSE error 事件通知前端"保存失败"，而不是静默吞掉导致
+                // 前端误以为修改成功（实际磁盘文件未被更新）。
                 log.error("保存失败: {}", e.getMessage());
+                throw new BusinessException(ErrorCode.SYSTEM_ERROR, "代码保存失败：" + e.getMessage());
             }
         });
     }
@@ -208,16 +216,157 @@ public class AiCodeGeneratorFacade {
      * 构建产物写入 {@code {projectDir}/dist}，预览通道会读取该 dist 目录。
      * 构建是耗时操作（首次 npm install 可能几十秒），此处异步执行避免阻塞
      * SSE 流式响应；构建结果由前端轮询 dist/index.html 是否存在来判断。
+     * <p>
+     * <b>自愈机制</b>：若首次构建因源码语法错误（如 Vue 标签未闭合）失败，
+     * 会把编译错误与当前源码回灌给 AI 修复一次，重新落盘后再构建一次（最多 1 次）。
+     * 仍失败则仅记录日志，不阻断流式返回（预览不可用但不影响部署）。
      *
      * @param projectDir 工程项目根目录（已落盘源码）
+     * @param appId      应用 id（用于自愈时按原目录名重新落盘）
      */
-    private void buildProjectForPreview(File projectDir) {
+    private void buildProjectForPreview(File projectDir, Long appId) {
+        // 清理上一轮可能残留的错误文件（本轮构建结果会重新写入）
+        File buildErrorFile = new File(projectDir, "build-error.txt");
+        FileUtil.del(buildErrorFile);
         try {
             ProjectBuilder.build(projectDir);
             log.info("工程化项目构建完成，预览产物已生成：{}", projectDir.getAbsolutePath());
         } catch (Exception e) {
-            log.error("工程化项目构建失败（预览不可用，但不影响部署）：{}", e.getMessage());
+            log.warn("工程化项目首次构建失败，尝试 AI 自愈修复：{}", e.getMessage());
+            boolean fixed = selfHeal(projectDir, appId, e.getMessage());
+            if (fixed) {
+                try {
+                    ProjectBuilder.build(projectDir);
+                    log.info("工程化项目自愈后构建成功：{}", projectDir.getAbsolutePath());
+                } catch (Exception e2) {
+                    writeBuildError(buildErrorFile, e2.getMessage());
+                    log.error("工程化项目自愈后仍构建失败（预览不可用，但不影响部署）：{}", e2.getMessage());
+                }
+            } else {
+                writeBuildError(buildErrorFile, e.getMessage());
+                log.error("工程化项目构建失败（预览不可用，但不影响部署）：{}", e.getMessage());
+            }
         }
+    }
+
+    /**
+     * 构建失败时把错误信息写入项目根目录的 build-error.txt。
+     * <p>
+     * 前端轮询 dist/index.html 超时后，会读取该文件把具体错误（含文件与行号）展示给用户，
+     * 解决此前"构建失败却看不到原因、继续对话也无法对症修复"的问题。
+     *
+     * @param buildErrorFile 错误文件（{projectDir}/build-error.txt）
+     * @param error          构建失败的错误信息
+     */
+    private void writeBuildError(File buildErrorFile, String error) {
+        try {
+            String msg = (error == null || error.isBlank()) ? "构建失败，无详细错误信息" : error;
+            FileUtil.writeUtf8String(msg, buildErrorFile);
+        } catch (Exception ex) {
+            log.warn("写入构建错误文件失败：{}", ex.getMessage());
+        }
+    }
+
+    /**
+     * 自愈：读取已落盘源码与编译错误，请求 AI 修复并重新落盘。
+     *
+     * @param projectDir 工程项目根目录
+     * @param appId      应用 id
+     * @param buildError 构建失败的错误信息（含文件与行号）
+     * @return 是否成功重新落盘（true 表示已重新生成，可再次尝试构建）
+     */
+    private boolean selfHeal(File projectDir, Long appId, String buildError) {
+        try {
+            // 1. 读取已落盘源码，拼成上下文。关键：必须排除 node_modules / dist / .git 等目录，
+            //    否则会把 node_modules 里海量依赖文件读进上下文（可达 20MB+），
+            //    超过 Jackson 默认字符串长度限制（20MB），导致 AI 修复请求直接失败。
+            StringBuilder src = new StringBuilder();
+            collectProjectSources(projectDir, projectDir, src);
+            if (src.length() == 0) {
+                log.warn("自愈跳过：未读取到任何源码文件");
+                return false;
+            }
+            // 2. 构造修复提示词。关键优化：只让 AI 修复「出错的文件」，而非重写整个工程。
+            //    因为后端落盘是"覆盖写、不删除"，未在 fileList 中出现的文件会保留磁盘原样；
+            //    这能把 AI 输出量降到最低，避免再次超出 8192 token 被截断（截断正是首次
+            //    构建失败"Unexpected EOF in tag"的根因）。
+            String userMessage = "你的前端工程化项目在 npm run build 时失败，请修复。\n"
+                    + "构建错误：\n" + buildError + "\n\n"
+                    + "当前项目源码如下（仅列出项目自身源码，依赖目录已省略）：\n" + src + "\n\n"
+                    + "修复要求：\n"
+                    + "1. 只修复导致构建失败的文件，只输出你真正修改过的文件（给出相对路径 + 完整内容），"
+                    + "未修改的文件不要重复输出，后端会保留磁盘上已有的文件。\n"
+                    + "2. 重点检查 Vue 模板标签是否成对闭合、是否因输出截断而出现未写完的代码；"
+                    + "被截断的文件请重新给出该文件的完整内容。\n"
+                    + "3. 严格按系统要求的「// 文件：相对路径」+ 代码块格式输出，不要输出 JSON，"
+                    + "不要输出任何解释性文字。";
+            // 3. 请求 AI 修复（memoryId 用与初始生成一致的 appId，保持对话上下文与记忆隔离）。
+            //    fixProjectCode 返回流式 Markdown（与 generateProjectCodeStream 一致），
+            //    需 collectList 收集后交给解析器解析成 ProjectCodeResult，再重新落盘。
+            String fixedText = aiCodeGeneratorService.fixProjectCode(appId, userMessage)
+                    .collectList()
+                    .map(list -> String.join("", list))
+                    .block();
+            ProjectCodeResult fixed = (ProjectCodeResult) CodeParserExecutor.executeParser(fixedText, CodeGenTypeEnum.PROJECT);
+            if (fixed == null || fixed.getFileList() == null || fixed.getFileList().isEmpty()) {
+                log.warn("自愈跳过：AI 未返回有效修复结果");
+                return false;
+            }
+            // 4. 重新落盘（目录名 {type}_{appId} 与原一致，覆盖旧文件）
+            CodeFileSaverExecutor.executeSaver(fixed, CodeGenTypeEnum.PROJECT, appId);
+            log.info("自愈完成，已重新落盘修复后的源码：{}", projectDir.getAbsolutePath());
+            return true;
+        } catch (Exception e) {
+            log.warn("自愈过程异常（预览不可用，但不影响部署）：{}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 递归收集项目源码文件，拼成带"// 文件：相对路径"标注的上下文文本。
+     * <p>
+     * 只收集工程自己的源码与配置文件，严格跳过 node_modules、dist、.git、.vite 等
+     * 依赖/构建产物目录，避免把海量第三方文件读进上下文（此前因读入 node_modules
+     * 导致字符串超 20MB、Jackson 反序列化失败，自愈彻底失效）。
+     *
+     * @param root      项目根目录（用于计算相对路径）
+     * @param dir       当前递归目录
+     * @param out       累积输出的 StringBuilder
+     */
+    private void collectProjectSources(File root, File dir, StringBuilder out) {
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return;
+        }
+        for (File f : children) {
+            String name = f.getName();
+            if (f.isDirectory()) {
+                // 跳过依赖与构建产物目录
+                if ("node_modules".equals(name) || "dist".equals(name)
+                        || ".git".equals(name) || ".vite".equals(name) || "target".equals(name)) {
+                    continue;
+                }
+                collectProjectSources(root, f, out);
+            } else if (f.isFile() && isTextFile(name)) {
+                // 控制单文件大小（源码不应超过 200KB），超限跳过避免异常大文件污染上下文
+                if (f.length() > 200 * 1024) {
+                    continue;
+                }
+                String rel = root.toPath().relativize(f.toPath()).toString().replace('\\', '/');
+                out.append("// 文件：").append(rel).append("\n");
+                out.append("```\n").append(FileUtil.readUtf8String(f)).append("\n```\n\n");
+            }
+        }
+    }
+
+    /**
+     * 判断是否为可读取的文本源码文件（避免把 node_modules / dist / 二进制读进上下文）。
+     */
+    private boolean isTextFile(String name) {
+        String lower = name.toLowerCase();
+        return lower.endsWith(".vue") || lower.endsWith(".ts") || lower.endsWith(".js")
+                || lower.endsWith(".css") || lower.endsWith(".html") || lower.endsWith(".json")
+                || lower.endsWith(".md") || lower.endsWith(".txt");
     }
 
     /**
@@ -364,12 +513,17 @@ public class AiCodeGeneratorFacade {
         if (context.length() == 0) {
             return userMessage;
         }
-        // 拼装"基于原代码修改"的提示词
+        // 拼装"基于原代码修改"的提示词。
+        // 关键：要求 AI 只输出「被修改的文件」而非整个工程，避免输出超 8192 token 被截断
+        // （截断正是首次生成构建失败、以及后续对话"没效果"的根因）。后端落盘是覆盖写、不删除，
+        // 未出现在 AI 输出里的文件会保留磁盘原样，因此增量输出是安全且更省 token 的。
         return StrUtil.format(
-                "以下是该应用当前已生成的完整代码，请严格基于这些原代码进行修改，不要重新生成一套全新的代码：\n\n" +
+                "以下是该应用当前已生成的代码，请严格基于这些原代码进行修改，不要重新生成一套全新的代码：\n\n" +
                         "{}\n" +
                         "用户的新需求：{}\n\n" +
-                        "请只针对上述需求对现有代码做最小化修改，保持其余功能、结构与样式不变，并按系统要求输出修改后的完整代码。",
+                        "请只针对上述需求对现有代码做最小化修改，保持其余功能、结构与样式不变。" +
+                        "只输出你真正修改过的文件（按系统要求的「// 文件：相对路径」+ 代码块格式，给出该文件的完整内容），" +
+                        "未修改的文件不要重复输出，后端会保留磁盘上已有的文件。",
                 context, userMessage);
     }
 
@@ -435,7 +589,18 @@ public class AiCodeGeneratorFacade {
      * @param codeDir 工程项目根目录
      */
     private void appendProjectFiles(StringBuilder context, File codeDir) {
-        File[] files = codeDir.listFiles();
+        appendProjectFiles(context, codeDir, codeDir);
+    }
+
+    /**
+     * 递归读取工程化项目目录下的所有文件，按相对工程根目录的路径拼入上下文。
+     *
+     * @param context    上下文字符串构建器
+     * @param rootDir    工程根目录（固定不变，用于计算相对路径）
+     * @param currentDir 当前递归目录
+     */
+    private void appendProjectFiles(StringBuilder context, File rootDir, File currentDir) {
+        File[] files = currentDir.listFiles();
         if (files == null) {
             return;
         }
@@ -443,15 +608,21 @@ public class AiCodeGeneratorFacade {
             String name = file.getName();
             // 跳过常见的大型/生成目录
             if (file.isDirectory()) {
-                if ("node_modules".equals(name) || "dist".equals(name) || ".git".equals(name) || "target".equals(name)) {
+                if ("node_modules".equals(name) || "dist".equals(name) || ".git".equals(name)
+                        || "target".equals(name) || ".vite".equals(name)) {
                     continue;
                 }
-                appendProjectFiles(context, file);
+                appendProjectFiles(context, rootDir, file);
             } else if (file.isFile()) {
-                // 用相对工程根目录的路径作为文件名标识
-                String relative = codeDir.toPath().relativize(file.toPath()).toString()
+                // 跳过非文本/超大文件，避免污染上下文
+                if (!isTextFile(name) || file.length() > 200 * 1024) {
+                    continue;
+                }
+                // 用相对工程根目录的完整路径作为文件名标识（如 src/App.vue），
+                // 保证 AI 能按正确路径返回被修改文件
+                String relative = rootDir.toPath().relativize(file.toPath()).toString()
                         .replace('\\', '/');
-                appendFileContent(context, codeDir, relative);
+                appendFileContent(context, rootDir, relative);
             }
         }
     }
