@@ -2,6 +2,7 @@ package com.example.aicode.core;
 
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
+import com.example.aicode.ai.model.CodeGenTypeSuggestion;
 import com.example.aicode.ai.model.HtmlCodeResult;
 import com.example.aicode.ai.model.MultiFileCodeResult;
 import com.example.aicode.ai.model.ProjectCodeResult;
@@ -299,7 +300,12 @@ public class AiCodeGeneratorFacade {
                     + "2. 重点检查 Vue 模板标签是否成对闭合、是否因输出截断而出现未写完的代码；"
                     + "被截断的文件请重新给出该文件的完整内容。\n"
                     + "3. 严格按系统要求的「// 文件：相对路径」+ 代码块格式输出，不要输出 JSON，"
-                    + "不要输出任何解释性文字。";
+                    + "不要输出任何解释性文字。\n"
+                    + "4. 若出错的文件过大（如 App.vue 超过 300 行）导致上次修复仍被截断，"
+                    + "请务必将其拆分为 App.vue + src/components/*.vue 多个子组件，每个文件控制在 200 行以内，"
+                    + "精简冗余样式与注释，只保留核心功能；"
+                    + "确保每个输出文件都完整（含 </template>、</script>、</style> 等闭合标签），"
+                    + "否则会再次因输出截断而构建失败。";
             // 3. 请求 AI 修复（memoryId 用与初始生成一致的 appId，保持对话上下文与记忆隔离）。
             //    fixProjectCode 返回流式 Markdown（与 generateProjectCodeStream 一致），
             //    需 collectList 收集后交给解析器解析成 ProjectCodeResult，再重新落盘。
@@ -578,6 +584,30 @@ public class AiCodeGeneratorFacade {
             return "json";
         }
         return "";
+    }
+
+    /**
+     * AI 智能选择代码生成方案。
+     * <p>
+     * 根据用户对应用/页面的自然语言描述，让 AI 路由判断应使用
+     * html / multi_file / project 中的哪一种代码生成方案。
+     * 该判断不依赖对话记忆，每次调用独立评估。
+     *
+     * @param userMessage 用户对应用/页面的自然语言描述
+     * @return 建议的 {@link CodeGenTypeEnum}；AI 返回为空或非法类型时兜底为 MULTI_FILE
+     */
+    public CodeGenTypeEnum suggestCodeGenType(String userMessage) {
+        CodeGenTypeSuggestion suggestion = aiCodeGeneratorService.suggestCodeGenType(userMessage);
+        if (suggestion == null || StrUtil.isBlank(suggestion.getType())) {
+            log.warn("AI 智能选择方案返回为空，兜底为 MULTI_FILE");
+            return CodeGenTypeEnum.MULTI_FILE;
+        }
+        CodeGenTypeEnum typeEnum = CodeGenTypeEnum.getEnumByValue(suggestion.getType().trim());
+        if (typeEnum == null) {
+            log.warn("AI 智能选择方案返回非法类型：{}，兜底为 MULTI_FILE", suggestion.getType());
+            return CodeGenTypeEnum.MULTI_FILE;
+        }
+        return typeEnum;
     }
 
     /**

@@ -1,5 +1,6 @@
 package com.example.aicode.service;
 
+import com.example.aicode.ai.model.CodeGenTypeSuggestion;
 import com.example.aicode.ai.model.HtmlCodeResult;
 import com.example.aicode.ai.model.MultiFileCodeResult;
 import com.example.aicode.ai.model.ProjectCodeResult;
@@ -159,5 +160,23 @@ public interface AiCodeGeneratorService {
     @SystemMessage(fromResource = "prompt/cccc.txt")
     @UserMessage("{{userMessage}}")
     Flux<String> fixProjectCode(@MemoryId Object memoryId, @V("userMessage") String userMessage);
+
+    /**
+     * AI 智能选择代码生成方案（同步 / 结构化输出）。
+     * <p>
+     * 根据用户对应用或页面的自然语言描述，由 AI 路由判断应该使用
+     * html / multi_file / project 中的哪一种代码生成方案。
+     * 返回值类型为 {@link CodeGenTypeSuggestion}，AI 以 JSON 返回
+     * {"type": "html"}，再反序列化为对象。
+     * <p>
+     * 注意：本方法不携带 {@code @MemoryId} 参数，即不参与对话记忆，
+     * 每次调用独立判断，避免污染其他会话的上下文。
+     *
+     * @param userMessage 用户对应用/页面的自然语言描述
+     * @return 包含建议类型标识（html / multi_file / project）的 {@link CodeGenTypeSuggestion}
+     */
+    @SystemMessage(fromResource = "prompt/typing.txt")
+    @UserMessage("{{userMessage}}")
+    CodeGenTypeSuggestion suggestCodeGenType(@V("userMessage") String userMessage);
 
 }

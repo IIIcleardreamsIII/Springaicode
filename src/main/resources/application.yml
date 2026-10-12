@@ -9,7 +9,7 @@ spring:
   # mysql
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/aicode   # TODO: 确认你的数据库名
+    url: jdbc:mysql://localhost:3306/aicode
     username: root
     password: ${DB_PASSWORD:}
   # redis

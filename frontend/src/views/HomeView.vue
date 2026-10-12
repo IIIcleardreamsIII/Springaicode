@@ -24,6 +24,17 @@
               <el-radio-button value="multi_file">多文件</el-radio-button>
               <el-radio-button value="project">工程化项目</el-radio-button>
             </el-radio-group>
+            <el-button
+              size="small"
+              type="primary"
+              plain
+              :loading="suggesting"
+              :disabled="!initPrompt.trim()"
+              @click="handleSuggestType"
+            >
+              <el-icon v-if="!suggesting"><Cpu /></el-icon>
+              {{ suggesting ? '分析中...' : 'AI 智能选择' }}
+            </el-button>
           </div>
           <el-button
             type="primary"
@@ -104,6 +115,13 @@
           <span>{{ formatDate(currentApp?.createTime) }}</span>
         </div>
         <div class="detail-row">
+          <span class="detail-label">下载次数</span>
+          <span class="detail-download">
+            <el-icon><Download /></el-icon>
+            {{ currentApp?.downloadCount ?? 0 }} 次
+          </span>
+        </div>
+        <div class="detail-row">
           <span class="detail-label">初始提示词</span>
           <p class="detail-prompt">{{ currentApp?.initPrompt }}</p>
         </div>
@@ -121,15 +139,16 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { MagicStick } from '@element-plus/icons-vue'
+import { MagicStick, Download, Cpu } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { addApp, listMyAppVOByPage, listGoodAppVOByPage } from '../api/app'
+import { addApp, listMyAppVOByPage, listGoodAppVOByPage, suggestCodeGenType } from '../api/app'
 import AppPreviewThumb from '../components/AppPreviewThumb.vue'
 
 const router = useRouter()
 
 const initPrompt = ref('')
 const creating = ref(false)
+const suggesting = ref(false)
 // 生成类型：html / multi_file / project，默认 html
 const codeGenType = ref('html')
 
@@ -147,6 +166,29 @@ function typeLabel(type) {
   if (type === 'multi_file') return '多文件'
   if (type === 'project') return '工程化项目'
   return '未知'
+}
+
+// AI 智能选择生成类型：根据应用描述让 AI 自动判断 html / multi_file / project，并回填到表单
+async function handleSuggestType() {
+  if (!initPrompt.value.trim()) {
+    ElMessage.warning('请先输入应用描述，再让 AI 智能选择')
+    return
+  }
+  suggesting.value = true
+  try {
+    const res = await suggestCodeGenType({ prompt: initPrompt.value.trim() })
+    if (res.code === 0 && res.data) {
+      codeGenType.value = res.data
+      ElMessage.success(`AI 已为您选择：${typeLabel(res.data)}`)
+    } else {
+      ElMessage.warning(res.message || 'AI 选择失败，请重试')
+    }
+  } catch (err) {
+    console.error('AI 智能选择失败:', err)
+    ElMessage.error('AI 智能选择失败，请稍后重试')
+  } finally {
+    suggesting.value = false
+  }
 }
 
 // 创建应用：入库后跳转对话页，由对话页根据"自己的 app + 无历史"自动开始首次生成
@@ -390,5 +432,11 @@ onMounted(() => {
   border-radius: var(--gh-radius);
   line-height: 1.6;
   word-break: break-all;
+}
+
+.detail-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 </style>
